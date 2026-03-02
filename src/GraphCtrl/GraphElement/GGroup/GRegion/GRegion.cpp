@@ -53,6 +53,12 @@ CStatus GRegion::run() {
     CGRAPH_ASSERT_NOT_NULL(manager_)
 
     status = manager_->run();
+
+    // 特殊处理的重试逻辑，当收到status  == RETRY || SKIP的时候，重新执行一次
+    if (status.getCode() == STATUS_TASK_REGION_RETRY || status.getCode() == STATUS_TASK_REGION_SKIP) {
+        // 重试或者跳过，均表示当前region执行成功 通过isHold来控制后续流程
+        return CStatus();    
+    }
     CGRAPH_FUNCTION_END
 }
 

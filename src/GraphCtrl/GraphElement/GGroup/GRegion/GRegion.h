@@ -13,7 +13,12 @@
 #include "../GGroup.h"
 #include "../../GElementManager.h"
 
+static const int STATUS_TASK_REGION_RETRY = -500;                      /** 重试流程重试当前Region返回值 */
+static const int STATUS_TASK_REGION_SKIP = -501;                       /** 重试流程跳过当前Region返回值 */
+static const int STATUS_TASK_PARAM_SKIP = -502;                        /** 参数异常，跳过当前Region返回值 */
+
 CGRAPH_NAMESPACE_BEGIN
+
 
 class GRegion : public GGroup {
 public:
