@@ -40,6 +40,8 @@ CGRAPH_TUTORIAL_LIST = [
          "T26-Mutable",
          "T27-Trim",
          "T28-Stage",
+         "T30-RegionDynamic",
+         "T31-RegionDynamicRegression",
         ]
 
 [

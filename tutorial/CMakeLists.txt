@@ -31,6 +31,8 @@ set(CGRAPH_TUTORIAL_LIST
          T27-Trim
          T28-Stage
          T29-Storage
+         T30-RegionDynamic
+         T31-RegionDynamicRegression
         )
 
 

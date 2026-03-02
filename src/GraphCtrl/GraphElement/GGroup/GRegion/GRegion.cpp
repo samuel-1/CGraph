@@ -24,6 +24,34 @@ GRegion::~GRegion() {
 }
 
 
+CStatus GRegion::enqueueDynamicNode(GElementPtr node, const GNodeInfo& info) {
+    CGRAPH_FUNCTION_BEGIN
+    CGRAPH_ASSERT_NOT_NULL(node)
+    CGRAPH_RETURN_ERROR_STATUS_BY_CONDITION(!node->isGNode(),
+                                            "enqueue dynamic element support GNode only")
+    CGRAPH_RETURN_ERROR_STATUS_BY_CONDITION((nullptr != node->belong_ && node->belong_ != this),
+                                            "enqueue dynamic element belong to other group")
+    CGRAPH_RETURN_ERROR_STATUS_BY_CONDITION((node->belong_ == this && node->is_init_),
+                                            "enqueue dynamic element duplicate in region")
+
+    {
+        CGRAPH_LOCK_GUARD lock(pending_dynamic_lock_);
+        auto isDup = std::any_of(pending_dynamic_nodes_.begin(), pending_dynamic_nodes_.end(),
+                                 [node](const GDynamicNodeInfo& cur) {
+                                     return cur.node_ == node;
+                                 });
+        CGRAPH_RETURN_ERROR_STATUS_BY_CONDITION(isDup,
+                                                "enqueue dynamic element duplicate in pending queue")
+
+        pending_dynamic_nodes_.emplace_back();
+        pending_dynamic_nodes_.back().node_ = node;
+        pending_dynamic_nodes_.back().info_ = info;
+    }
+    has_pending_dynamic_node_.store(true, std::memory_order_release);
+    CGRAPH_FUNCTION_END
+}
+
+
 CStatus GRegion::init() {
     CGRAPH_FUNCTION_BEGIN
     // 在这里将初始化所有的节点信息，并且实现分析，联通等功能
@@ -42,6 +70,23 @@ CStatus GRegion::destroy() {
     status = manager_->destroy();
     CGRAPH_FUNCTION_CHECK_STATUS
 
+    {
+        std::vector<GDynamicNodeInfo> pendingNodes;
+        {
+            CGRAPH_LOCK_GUARD lock(pending_dynamic_lock_);
+            pendingNodes.swap(pending_dynamic_nodes_);
+            has_pending_dynamic_node_.store(false, std::memory_order_release);
+        }
+
+        for (auto& pending : pendingNodes) {
+            if (pending.node_) {
+                auto* node = pending.node_;
+                pending.node_ = nullptr;
+                delete node;
+            }
+        }
+    }
+
     is_init_ = false;
     CGRAPH_FUNCTION_END
 }
@@ -51,6 +96,9 @@ CStatus GRegion::run() {
     CGRAPH_FUNCTION_BEGIN
     CGRAPH_ASSERT_INIT(true)
     CGRAPH_ASSERT_NOT_NULL(manager_)
+
+    status = applyDynamicNodes();
+    CGRAPH_FUNCTION_CHECK_STATUS
 
     status = manager_->run();
 
@@ -117,6 +165,85 @@ CBool GRegion::isSerializable() const {
 
 CBool GRegion::isSeparate(GElementCPtr a, GElementCPtr b) const {
     return GSeparateOptimizer::checkSeparate(manager_->manager_elements_, a, b);
+}
+
+
+CStatus GRegion::applyDynamicNodes() {
+    CGRAPH_FUNCTION_BEGIN
+    CGRAPH_ASSERT_NOT_NULL(manager_)
+
+    if (!has_pending_dynamic_node_.load(std::memory_order_acquire)) {
+        return status;
+    }
+
+    std::vector<GDynamicNodeInfo> pendingNodes;
+    {
+        CGRAPH_LOCK_GUARD lock(pending_dynamic_lock_);
+        if (pending_dynamic_nodes_.empty()) {
+            has_pending_dynamic_node_.store(false, std::memory_order_release);
+            return status;
+        }
+        pendingNodes.swap(pending_dynamic_nodes_);
+        has_pending_dynamic_node_.store(false, std::memory_order_release);
+    }
+
+    for (CSize idx = 0; idx < pendingNodes.size(); idx++) {
+        const auto& pendingNode = pendingNodes[idx];
+        auto* node = pendingNode.node_;
+        CGRAPH_ASSERT_NOT_NULL(node)
+
+        auto* oldBelong = node->belong_;
+
+        // 依赖关系校验会检查 belong_ 一致性，先绑定 region 再写依赖
+        node->belong_ = this;
+
+        status = node->addElementInfo(pendingNode.info_.dependence_, pendingNode.info_.name_, pendingNode.info_.loop_);
+        if (status.isErr()) {
+            node->belong_ = oldBelong;
+        }
+        CGRAPH_FUNCTION_CHECK_STATUS
+
+        status = node->addManagers(param_manager_, event_manager_, stage_manager_);
+        if (status.isErr()) {
+            for (auto* dependence : node->dependence_) {
+                dependence->run_before_.remove(node);
+            }
+            node->dependence_.clear();
+            node->left_depend_.store(0, std::memory_order_release);
+            node->belong_ = oldBelong;
+        }
+        CGRAPH_FUNCTION_CHECK_STATUS
+
+        status = node->fatProcessor(CFunctionType::INIT);
+        if (status.isErr()) {
+            for (auto* dependence : node->dependence_) {
+                dependence->run_before_.remove(node);
+            }
+            node->dependence_.clear();
+            node->left_depend_.store(0, std::memory_order_release);
+            node->belong_ = oldBelong;
+
+            {
+                CGRAPH_LOCK_GUARD lock(pending_dynamic_lock_);
+                for (CSize remain = idx; remain < pendingNodes.size(); remain++) {
+                    pending_dynamic_nodes_.emplace_back();
+                    pending_dynamic_nodes_.back().node_ = pendingNodes[remain].node_;
+                    pending_dynamic_nodes_.back().info_ = pendingNodes[remain].info_;
+                }
+                has_pending_dynamic_node_.store(true, std::memory_order_release);
+            }
+        }
+        CGRAPH_FUNCTION_CHECK_STATUS
+
+        node->is_init_ = true;
+
+        group_elements_arr_.emplace_back(node);
+        manager_->manager_elements_.emplace(node);
+    }
+
+    // region 的执行引擎会缓存拓扑，新增节点后需要重建
+    status = manager_->initEngine();
+    CGRAPH_FUNCTION_END
 }
 
 
