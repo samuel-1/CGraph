@@ -67,6 +67,9 @@ CStatus GRegion::init() {
 
 CStatus GRegion::destroy() {
     CGRAPH_FUNCTION_BEGIN
+    status += teardownDynamicNodes();
+    CGRAPH_FUNCTION_CHECK_STATUS
+
     status = manager_->destroy();
     CGRAPH_FUNCTION_CHECK_STATUS
 
@@ -101,6 +104,11 @@ CStatus GRegion::run() {
     CGRAPH_FUNCTION_CHECK_STATUS
 
     status = manager_->run();
+
+    auto runStatus = status;
+    status += teardownDynamicNodes();
+    CGRAPH_FUNCTION_CHECK_STATUS
+    status = runStatus;
 
     // 特殊处理的重试逻辑，当收到status  == RETRY || SKIP的时候，重新执行一次
     if (status.getCode() == STATUS_TASK_REGION_RETRY || status.getCode() == STATUS_TASK_REGION_SKIP) {
@@ -214,6 +222,9 @@ CStatus GRegion::applyDynamicNodes() {
         }
         CGRAPH_FUNCTION_CHECK_STATUS
 
+        // 动态节点上的aspect需要在INIT前补齐belong/manager上下文
+        node->updateAspectInfo();
+
         status = node->fatProcessor(CFunctionType::INIT);
         if (status.isErr()) {
             for (auto* dependence : node->dependence_) {
@@ -239,9 +250,55 @@ CStatus GRegion::applyDynamicNodes() {
 
         group_elements_arr_.emplace_back(node);
         manager_->manager_elements_.emplace(node);
+        dynamic_nodes_.emplace(node);
     }
 
     // region 的执行引擎会缓存拓扑，新增节点后需要重建
+    status = manager_->initEngine();
+    CGRAPH_FUNCTION_END
+}
+
+
+CStatus GRegion::teardownDynamicNodes() {
+    CGRAPH_FUNCTION_BEGIN
+    if (dynamic_nodes_.empty()) {
+        return status;
+    }
+
+    std::vector<GElementPtr> dynamicNodes(dynamic_nodes_.begin(), dynamic_nodes_.end());
+    for (auto* node : dynamicNodes) {
+        CGRAPH_ASSERT_NOT_NULL(node)
+
+        for (auto* dependence : node->dependence_) {
+            if (dependence) {
+                dependence->run_before_.remove(node);
+            }
+        }
+
+        for (auto* successor : node->run_before_) {
+            if (successor) {
+                successor->dependence_.remove(node);
+                successor->left_depend_.store(successor->dependence_.size(), std::memory_order_release);
+            }
+        }
+
+        node->dependence_.clear();
+        node->run_before_.clear();
+        node->left_depend_.store(0, std::memory_order_release);
+
+        if (node->is_init_) {
+            status += node->fatProcessor(CFunctionType::DESTROY);
+            CGRAPH_FUNCTION_CHECK_STATUS
+            node->is_init_ = false;
+        }
+
+        manager_->manager_elements_.erase(node);
+        group_elements_arr_.erase(std::remove(group_elements_arr_.begin(), group_elements_arr_.end(), node),
+                                  group_elements_arr_.end());
+        delete node;
+    }
+
+    dynamic_nodes_.clear();
     status = manager_->initEngine();
     CGRAPH_FUNCTION_END
 }

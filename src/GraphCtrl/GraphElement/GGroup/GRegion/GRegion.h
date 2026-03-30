@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <unordered_set>
 #include <vector>
 
 #include "../GGroup.h"
@@ -97,11 +98,18 @@ private:
      */
     CStatus applyDynamicNodes();
 
+    /**
+     * 每次run结束后，销毁本轮动态注入的节点
+     * @return
+     */
+    CStatus teardownDynamicNodes();
+
 private:
     GElementManagerPtr manager_ = nullptr;    // region 内部通过 manager来管理其中的 element 信息
     std::vector<GDynamicNodeInfo> pending_dynamic_nodes_ {};    // 运行中待写入的节点
     std::mutex pending_dynamic_lock_ {};
     std::atomic<CBool> has_pending_dynamic_node_ { false };
+    std::unordered_set<GElementPtr> dynamic_nodes_ {};          // 当前已生效的动态节点
 
     CGRAPH_NO_ALLOWED_COPY(GRegion)
 

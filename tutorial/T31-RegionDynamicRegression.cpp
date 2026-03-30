@@ -7,6 +7,7 @@
 
 #include "MyGNode/MyNode1.h"
 #include "MyGNode/MyNode2.h"
+#include "MyGAspect/MyTraceAspect.h"
 
 using namespace CGraph;
 
@@ -28,7 +29,8 @@ public:
 
     enum class Mode {
         DUPLICATE,
-        INVALID_DEP
+        INVALID_DEP,
+        WITH_ASPECT
     };
 
     GRegionPtr region_ { nullptr };
@@ -58,10 +60,16 @@ public:
             CGRAPH_FUNCTION_CHECK_STATUS
             status = param->region_->enqueueDynamicNode(dup, GNodeInfo({param->tail_}, "dup_dyn", 1));
             CGRAPH_FUNCTION_CHECK_STATUS
-        } else {
+        } else if (param->mode_ == RegionInjectParam::Mode::INVALID_DEP) {
             auto* bad = new(std::nothrow) MyNode1();
             CGRAPH_ASSERT_NOT_NULL(bad)
             status = param->region_->enqueueDynamicNode(bad, GNodeInfo({param->outsider_}, "bad_dep_dyn", 1));
+            CGRAPH_FUNCTION_CHECK_STATUS
+        } else {
+            auto* withAspect = new(std::nothrow) MyNode1();
+            CGRAPH_ASSERT_NOT_NULL(withAspect)
+            withAspect->addGAspect<MyTraceAspect>();
+            status = param->region_->enqueueDynamicNode(withAspect, GNodeInfo({param->tail_}, "aspect_dyn", 1));
             CGRAPH_FUNCTION_CHECK_STATUS
         }
 
@@ -166,8 +174,43 @@ static void case_invalid_dependency_enqueue() {
     GPipelineFactory::remove(pipeline);
 }
 
+
+static void case_dynamic_node_with_aspect() {
+    CStatus status;
+    GPipelinePtr pipeline = GPipelineFactory::create();
+    GElementPtr tail = nullptr, outer = nullptr;
+    auto* region = buildRegionPipeline(pipeline, tail, outer);
+    if (nullptr == region) {
+        GPipelineFactory::remove(pipeline);
+        return;
+    }
+
+    status += pipeline->init();
+    if (!status.isOK()) {
+        GPipelineFactory::remove(pipeline);
+        return;
+    }
+
+    RegionInjectParam param;
+    param.region_ = region;
+    param.tail_ = tail;
+    param.mode_ = RegionInjectParam::Mode::WITH_ASPECT;
+    region->addGAspect<RegionInjectAspect, RegionInjectParam>(&param);
+
+    status = pipeline->run();
+    if (status.isOK()) {
+        CGRAPH_ECHO("[T31][PASS] dynamic node with aspect works, code=%d", status.getCode());
+    } else {
+        CGRAPH_ECHO("[T31][FAIL] dynamic node with aspect should run successfully, code=%d", status.getCode());
+    }
+
+    pipeline->destroy();
+    GPipelineFactory::remove(pipeline);
+}
+
 int main() {
     case_duplicate_node_enqueue();
     case_invalid_dependency_enqueue();
+    case_dynamic_node_with_aspect();
     return 0;
 }

@@ -1,0 +1,28 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "gcc-ninja-debug",
+      "displayName": "GCC Ninja Debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-gcc-ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gcc-ninja-debug",
+      "configurePreset": "gcc-ninja-debug",
+      "jobs": 4
+    }
+  ]
+}
